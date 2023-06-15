@@ -1,0 +1,137 @@
+import matplotlib.pyplot as plt
+from matplotlib import gridspec
+import om4labs
+import xarray as xr
+import numpy as np
+import sectionate
+from glob import glob
+import momlevel
+
+def MOC_xsec_nodes(
+    dir_base,
+    section_node_lons,
+    section_node_lats,
+    file_str_identifier,
+    dir_vars="gfdl.ncrc4-intel18-prod-openmp/pp/ocean_annual_rho2/ts/annual/10yr/",
+    dir_grid="gfdl.ncrc4-intel18-prod-openmp/pp/ocean_annual_rho2/ocean_annual_rho2.static.nc",
+    z_layer_var="rho2_l",
+    z_inter_var="rho2_i",
+    u_transport_var="umo",
+    v_transport_var="vmo",
+    time_limits=[],
+    x_hpoint_1Dvar="xh",
+    x_qpoint_1Dvar="xq",
+    y_hpoint_1Dvar="yh",
+    y_qpoint_1Dvar="yq",
+    time_var="time",
+    lons_tpoint="geolon",
+    lats_tpoint="geolat",
+    lons_cpoint="geolon_c",
+    lats_cpoint="geolat_c",
+    plot_flag=True,
+    decode_times_flag=False,
+):
+    """Calculate MOC along the specified cross section  (from section_node points). 
+    Defaults are set to calculate density-space AMOC from online density-space transports, 
+    but the directory and variable names can be changed to select any other variable. 
+    
+    Args:
+        dir_base (string): base directory of the simulation to be used e.g. "/archive/Raphael.Dussin/FMS2019.01.03_devgfdl_20210706/CM4_piControl_c192_OM4p125_v6_alt3/"
+        section_node_lons (vector): 1D vector of longitude nodes that (together with section_node_lats) define a cross section. E.g.: [60.3000, 58.8600, 58.0500, 58.0000, 56.5000]
+        section_node_lats (vector): 1D vector of latitude nodes that define the cross section. For use in Raphael Dussin's sectionate tool, which finds all grid cell locations along straight lines between each lon/lat node. E.g [-44.9000, -30.5400, -28.0000, -14.7000, -5.9300]
+        file_str_identifier (string): string that identifies a particular output file or set of output files. E.g. ".0196*", which will identify all strings containing '.0196'
+        dir_vars (string): subdirectory containing the depth-space output files. 
+        dir_grid (string): subdirectory cotaining the grid info file
+        z_layer_var (string): variable name for the vertical coordinate at the grid centre
+        z_inter_var (string): variable name for the vertical coordinate at the grid interface
+        u_transport_var (string): variable name for the zonal transport
+        v_transport_var (string): variable name for the meridional transport
+        time_limits (vector): a 2-element vector of the type [time_start,time_limit], using the same units as in the data, that allows the data to be limited within these time margins 
+        x_hpoint_1Dvar (string) etc: coordinate names of the 1D lon and lat q and h points
+        lons_tpoint (string) etc: variable names for the 2D lon and lat grid at the grid centre
+        lons_cpoint (string) etc: variable names for the 2D lon and lat grid at the grid corner
+        time_var (string): coordinate name of the time dimension
+        plot_flag (logical): if True then the routine will make some basic plots
+        decode_times_flag (logical): 
+
+    output:
+        dsT (xarray dataset):  output from Raphael Dussin's sectionate tool, containing transport and grid information along the specified cross-section
+        MOC_mean (xarray dataset): MOC streamfunction calculated along the specified cross section
+        MOC_ts (xarray dataset): timeseries of maximum MOC along the specified cross section
+
+    """
+    
+    umo_vars_str=dir_base+dir_vars+"*"+file_str_identifier+"*."+u_transport_var+".nc"
+    vmo_vars_str=dir_base+dir_vars+"*"+file_str_identifier+"*."+v_transport_var+".nc"
+    files_timestep=glob(f"{umo_vars_str}")
+    files_timestep+=glob(f"{vmo_vars_str}")
+    
+    ds = xr.open_mfdataset(files_timestep, decode_times=decode_times_flag)
+    grid=xr.open_dataset(dir_base+dir_grid)
+
+    ### If there are not the same number of dimensions of yq and yh, cut off the extra dimension:
+    if len(ds[y_qpoint_1Dvar])==len(ds[y_hpoint_1Dvar])+1:
+        ds = ds.isel( { y_qpoint_1Dvar: slice(1,len(ds[y_qpoint_1Dvar])) } )
+        grid = grid.isel( { y_qpoint_1Dvar: slice(1,len(ds[y_qpoint_1Dvar])) } )
+    elif len(ds[y_qpoint_1Dvar])==len(ds[y_hpoint_1Dvar]):
+        'this is fine'
+    else:
+        raise Exception("yq must be more positive than yh or be 1 element larger than yh")
+    if len(ds[x_qpoint_1Dvar])==len(ds[x_hpoint_1Dvar])+1:
+        ds = ds.isel( { x_qpoint_1Dvar: slice(1,len(ds[x_qpoint_1Dvar])) } )
+        grid = grid.isel( { x_qpoint_1Dvar: slice(1,len(ds[x_qpoint_1Dvar])) } )
+    elif len(ds[x_qpoint_1Dvar])==len(ds[x_hpoint_1Dvar]):
+        'this is fine'
+    else:
+        raise Exception("xq must be more positive than xh or be 1 element larger than xh")
+
+    ### If the 1D coordinate names are not xh,xq, etc, then rename them to x_hpoint_1Dvar, x_qpoint_1Dvar etc
+    if y_hpoint_1Dvar != "yh":
+        ds = ds.rename({y_hpoint_1Dvar: 'yh'})
+        grid = grid.rename({y_hpoint_1Dvar: 'yh'})
+    if y_qpoint_1Dvar != "yq":
+        ds = ds.rename({y_qpoint_1Dvar: 'yq'})
+        grid = grid.rename({y_qpoint_1Dvar: 'yq'})
+    if x_hpoint_1Dvar != "xh":
+        ds = ds.rename({x_hpoint_1Dvar: 'xh'})
+        grid = grid.rename({x_hpoint_1Dvar: 'xh'})
+    if x_qpoint_1Dvar != "xq":
+        ds = ds.rename({x_qpoint_1Dvar: 'xq'})
+        grid = grid.rename({x_qpoint_1Dvar: 'xq'})
+    if time_var != "time":
+        ds = ds.rename({time_var: 'time'})
+        grid = grid.rename({time_var: 'time'})
+    
+    ### Reduce xarray data domain to fit around chosen section coordinates
+    lat_range_min=np.abs(ds.yh-(min(section_node_lats)-1)).argmin()
+    lat_range_max=np.abs(ds.yh-(max(section_node_lats)+1)).argmin()
+    lon_range_min=np.abs(ds.xh-(min(section_node_lons)-1)).argmin()
+    lon_range_max=np.abs(ds.xh-(max(section_node_lons)+10)).argmin()
+    if np.any(time_limits):
+        ds_subpolar = ds.sel(yq=slice(ds.yq[lat_range_min],ds.yq[lat_range_max]),xh=slice(ds.xh[lon_range_min],ds.xh[lon_range_max]),yh=slice(ds.yh[lat_range_min],ds.yh[lat_range_max]),xq=slice(ds.xq[lon_range_min],ds.xq[lon_range_max]),time=slice(time_limits[0],time_limits[1]))
+    else: 
+        ds_subpolar = ds.sel(yq=slice(ds.yq[lat_range_min],ds.yq[lat_range_max]),xh=slice(ds.xh[lon_range_min],ds.xh[lon_range_max]),yh=slice(ds.yh[lat_range_min],ds.yh[lat_range_max]),xq=slice(ds.xq[lon_range_min],ds.xq[lon_range_max]))
+    grid_subpolar = grid.sel(yq=slice(ds.yq[lat_range_min],ds.yq[lat_range_max]),xh=slice(ds.xh[lon_range_min],ds.xh[lon_range_max]),yh=slice(ds.yh[lat_range_min],ds.yh[lat_range_max]),xq=slice(ds.xq[lon_range_min],ds.xq[lon_range_max]))
+    	
+    ### Run Raf's sectionate tool to extract T,S and V along chosen section coordinates
+    isec, jsec, xsec, ysec = sectionate.create_section_composite(grid_subpolar['geolon_c'],
+                                                                 grid_subpolar['geolat_c'],
+                                                                 section_node_lons,
+                                                                 section_node_lats)
+    
+    [corner_offset1,corner_offset2]=sectionate.find_offset_center_corner(grid_subpolar[lons_tpoint], grid_subpolar[lats_tpoint], grid_subpolar[lons_cpoint], grid_subpolar[lats_cpoint])
+    
+    dsT = sectionate.MOM6_normal_transport(ds_subpolar, isec, jsec,utr=u_transport_var,vtr=v_transport_var,layer=z_layer_var,interface=z_inter_var,offset_center_x=corner_offset1,offset_center_y=corner_offset2,old_algo=True)
+    transp_vals=dsT.uvnormal
+    
+    earth_radius=6371000  # in km
+    section_gridwidth=earth_radius*sectionate.distance_on_unit_sphere(ysec[0:-1],xsec[0:-1],ysec[1:],xsec[1:])
+    
+    MOC_mean=dsT.uvnormal.mean(dim=time_var).sum(dim='sect',skipna=True).cumsum(dim=z_layer_var)/1030/1e6
+    MOC_ts=dsT.uvnormal.sum(dim='sect',skipna=True).cumsum(dim=z_layer_var).max(dim=z_layer_var)/1030/1e6
+
+    if plot_flag==1:
+        plt.figure(figsize=(8,6)),MOC_mean.plot(y=z_layer_var,ylim=[1033,1037.5])
+        plt.figure(figsize=(8,6)),MOC_ts.plot()
+        
+    return dsT, MOC_mean, MOC_ts
