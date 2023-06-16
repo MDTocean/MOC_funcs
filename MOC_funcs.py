@@ -77,6 +77,9 @@ def MOC_xsec_nodes_online(
 
     """
     
+    ########################
+    ### create a list of files to load:
+
     umo_vars_str=dir_vars+"*"+file_str_identifier+"*."+u_transport_var+".nc"
     vmo_vars_str=dir_vars+"*"+file_str_identifier+"*."+v_transport_var+".nc"
     files_timestep=glob(f"{umo_vars_str}")
@@ -86,6 +89,9 @@ def MOC_xsec_nodes_online(
         print(f"{'dmget '+vmo_vars_str+' &'}")
         return [],[],[],[],[]
 
+    ########################
+    ### If a zarr_dir is given, modify the list of files to read to/write from there instead:
+
     if zarr_dir:
         for count, filename in enumerate(files_timestep):
             files_timestep[count] = zarr_dir+filename+'.zarr'
@@ -94,6 +100,9 @@ def MOC_xsec_nodes_online(
                 ds_filename.to_zarr(zarr_dir+filename+'.zarr')
 
                 
+    ########################
+    ### Read the data from the list of files:
+    
     ds = xr.open_mfdataset(files_timestep, decode_times=decode_times_flag)
     grid=xr.open_dataset(dir_grid)
     
@@ -113,7 +122,9 @@ def MOC_xsec_nodes_online(
     else:
         raise Exception("xq must be more positive than xh or be 1 element larger than xh")
 
-    ### If the variable coordinate names are not xh,xq, etc, then rename them to the specified x_hpoint_1Dvar, x_qpoint_1Dvar etc
+    #######################
+    ### If the 1D coordinate names are not xh,xq, etc, then rename them to x_hpoint_1Dvar, x_qpoint_1Dvar etc (The sectionate tool requries it):
+    
     if y_hpoint_1Dvar != "yh":
         ds = ds.rename({y_hpoint_1Dvar: 'yh'})
     if y_qpoint_1Dvar != "yq":
@@ -125,7 +136,7 @@ def MOC_xsec_nodes_online(
     if time_var != "time":
         ds = ds.rename({time_var: 'time'})
     
-        ### If the grid coordinate names are not xh,xq, etc, then rename them to the specified x_hpoint_1Dvar, x_qpoint_1Dvar etc
+    ### If the grid coordinate names are not xh,xq, etc, then rename them to the specified x_hpoint_1Dvar, x_qpoint_1Dvar etc:
     if grid_y_hpoint_1Dvar != "yh":
         grid = grid.rename({grid_y_hpoint_1Dvar: 'yh'})
     if grid_y_qpoint_1Dvar != "yq":
@@ -137,7 +148,9 @@ def MOC_xsec_nodes_online(
     if time_var != "time":
         grid = grid.rename({time_var: 'time'})
     
-    ### Reduce xarray data domain to fit around chosen section coordinates
+    ########################
+    ### Reduce the spatial domain to fit around the chosen section coordinates (with a 10 deg buffer around it):
+    
     lat_range_min=np.abs(ds.yh-(min(section_node_lats)-1)).argmin()
     lat_range_max=np.abs(ds.yh-(max(section_node_lats)+1)).argmin()
     lon_range_min=np.abs(ds.xh-(min(section_node_lons)-1)).argmin()
@@ -149,7 +162,11 @@ def MOC_xsec_nodes_online(
         ds_subpolar = ds.sel(yq=slice(ds.yq[lat_range_min],ds.yq[lat_range_max]),xh=slice(ds.xh[lon_range_min],ds.xh[lon_range_max]),yh=slice(ds.yh[lat_range_min],ds.yh[lat_range_max]),xq=slice(ds.xq[lon_range_min],ds.xq[lon_range_max]))
     grid_subpolar = grid.sel(yq=slice(ds.yq[lat_range_min],ds.yq[lat_range_max]),xh=slice(ds.xh[lon_range_min],ds.xh[lon_range_max]),yh=slice(ds.yh[lat_range_min],ds.yh[lat_range_max]),xq=slice(ds.xq[lon_range_min],ds.xq[lon_range_max]))
     
-    ### Run Raf's sectionate tool to extract T,S and V along chosen section coordinates
+    ########################
+    ### Run Raf's sectionate tool to grid section coordinates:    #####################
+    ### Use sectionate with the xarray dataset of variables to get T,S and rho (if specified in the inputs) along the chosen cross-section:
+
+    
     isec, jsec, xsec, ysec = sectionate.create_section_composite(grid_subpolar['geolon_c'],
                                                                  grid_subpolar['geolat_c'],
                                                                  section_node_lons,
@@ -157,15 +174,28 @@ def MOC_xsec_nodes_online(
     
     [corner_offset1,corner_offset2]=sectionate.find_offset_center_corner(grid_subpolar[lons_tpoint], grid_subpolar[lats_tpoint], grid_subpolar[lons_cpoint], grid_subpolar[lats_cpoint])
     
+    #####################
+    ### Use sectionate with the xarray dataset of variables to get the transport along the chosen cross-section:
+    
     dsT = sectionate.MOM6_normal_transport(ds_subpolar, isec, jsec,utr=u_transport_var,vtr=v_transport_var,layer=z_layer_var,interface=z_inter_var,offset_center_x=corner_offset1,offset_center_y=corner_offset2,old_algo=True)
     transp_vals=dsT.uvnormal
+    
+    ######################
+    ### Approximate the grid cell width:
     
     earth_radius=6371000  # in km
     section_gridwidth=earth_radius*sectionate.distance_on_unit_sphere(ysec[0:-1],xsec[0:-1],ysec[1:],xsec[1:])
     
+    #####################
+    ### calculate the MOC:
+    
     MOC_mean=dsT.uvnormal.mean(dim=time_var).sum(dim='sect',skipna=True).cumsum(dim=z_layer_var)/1030/1e6
     MOC_ts=dsT.uvnormal.sum(dim='sect',skipna=True).cumsum(dim=z_layer_var).max(dim=z_layer_var)/1030/1e6
 
+    
+    ####################
+    ### make simple plots if plog_flag is True:
+    
     if plot_flag==1:
         plt.figure(figsize=(8,6)),MOC_mean.plot(y=z_layer_var,ylim=[1033,1037.5])
         plt.figure(figsize=(8,6)),MOC_ts.plot()
